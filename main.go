@@ -78,6 +78,11 @@ func main() {
 		whitelistArr = strings.Split(whitelist, ",")
 	}
 
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
 	errorFile := os.Getenv("ERROR_FILE")
 	var errorData []byte
 	if errorFile != "" {
@@ -245,8 +250,8 @@ func main() {
 	println("App URL:", appUrl.String())
 	println("Proxy URL:", proxyUrl.String())
 
-	println("Starting proxy server on :8080")
-	err = http.ListenAndServe(":8080", nil)
+	println("Starting proxy server on port", port)
+	err = http.ListenAndServe(":"+port, nil)
 	if errors.Is(err, http.ErrServerClosed) {
 		fmt.Printf("server closed\n")
 	} else if err != nil {
