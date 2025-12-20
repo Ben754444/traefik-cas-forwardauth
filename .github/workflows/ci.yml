@@ -22,4 +22,6 @@ jobs:
         - name: Upload build artifacts
           uses: actions/upload-artifact@v6
           with:
-            name: build-artifacts
+            path: ./cas-proxy
+            name: cas-proxy
+
