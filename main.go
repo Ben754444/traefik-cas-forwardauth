@@ -37,7 +37,7 @@ func isWhitelisted(user string, whitelist []string) bool {
 func genToken(user string, hmacSecret []byte) string {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"user": user,
-		"exp":  jwt.NewNumericDate(time.Now().Add(6 * time.Second)),
+		"exp":  jwt.NewNumericDate(time.Now().Add(6 * time.Hour)),
 	})
 	tokenString, err := token.SignedString(hmacSecret)
 	if err != nil {
@@ -96,7 +96,15 @@ func main() {
 	}
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-
+		newUrl := &url.URL{
+			Scheme:   proxyUrl.Scheme,
+			Opaque:   proxyUrl.Opaque,
+			Host:     proxyUrl.Host,
+			User:     proxyUrl.User,
+			Path:     r.URL.Path,
+			RawQuery: r.URL.RawQuery,
+			Fragment: r.URL.Fragment,
+		}
 		// if authenticated
 		cookie, err := r.Cookie("session_id")
 		if err == nil {
@@ -109,7 +117,7 @@ func main() {
 					Name:   "session_id",
 					MaxAge: -1,
 				})
-				http.Redirect(w, r, casUrl.String()+"/login?service="+url.QueryEscape(proxyUrl.String()+"/"+r.URL.Path+"?"+r.URL.RawQuery+"#"+r.URL.Fragment), http.StatusFound)
+				http.Redirect(w, r, casUrl.String()+"/login?service="+url.QueryEscape(newUrl.String()), http.StatusFound)
 				return
 			}
 
@@ -163,11 +171,23 @@ func main() {
 
 		if r.URL.Query().Get("ticket") != "" {
 			ticket := r.URL.Query().Get("ticket")
+			// remove ticket from URL
 			query := r.URL.Query()
 			query.Del("ticket")
 			rawQuery := query.Encode()
-
-			serviceValidation, err := http.Get(casUrl.String() + "/serviceValidate?service=" + url.QueryEscape(proxyUrl.String()+"/"+r.URL.Path+"?"+rawQuery+"#"+r.URL.Fragment) + "&ticket=" + url.QueryEscape(ticket))
+			// r.URL doesnt have the fucking scheme (or probably host) guessing cuz of http.handleFunc starting at /.
+			// go back to proxy_url maybe but that was beong weird
+			newUrl := &url.URL{
+				Scheme:   proxyUrl.Scheme,
+				Opaque:   proxyUrl.Opaque,
+				Host:     proxyUrl.Host,
+				User:     proxyUrl.User,
+				Path:     r.URL.Path,
+				RawQuery: rawQuery,
+				Fragment: r.URL.Fragment,
+			}
+			println(newUrl.String())
+			serviceValidation, err := http.Get(casUrl.String() + "/serviceValidate?service=" + url.QueryEscape(newUrl.String()) + "&ticket=" + ticket)
 			if err != nil || serviceValidation.StatusCode != http.StatusOK {
 				slog.Debug("Failed to validate CAS ticket:", slog.String("error", err.Error()))
 				http.Error(w, "CAS communication error", http.StatusInternalServerError)
@@ -196,7 +216,8 @@ func main() {
 			if serviceResponse.User == "" {
 				slog.Debug("CAS authentication failed: no user in response")
 				slog.Debug("CAS response:", slog.String("response", string(body)))
-				http.Error(w, "CAS authentication failed", http.StatusUnauthorized)
+				//http.Error(w, "CAS authentication failed", http.StatusUnauthorized)
+				http.Redirect(w, r, casUrl.String()+"/login?service="+url.QueryEscape(newUrl.String()), http.StatusFound)
 				return
 			}
 
@@ -216,7 +237,7 @@ func main() {
 			return
 		}
 
-		http.Redirect(w, r, casUrl.String()+"/login?service="+url.QueryEscape(proxyUrl.String()+"/"+r.URL.Path+"?"+r.URL.RawQuery+"#"+r.URL.Fragment), http.StatusFound)
+		http.Redirect(w, r, casUrl.String()+"/login?service="+url.QueryEscape(newUrl.String()), http.StatusFound)
 
 	})
 
