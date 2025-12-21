@@ -22,7 +22,7 @@ type ServiceResponse struct {
 	User string `xml:"authenticationSuccess>user"`
 }
 
-func isInLdapGroups(user string, ldapGroups []string, conn *ldap.Conn) bool {
+func isInLdapGroups(user string, ldapGroups []string, conn **ldap.Conn) bool {
 	if len(ldapGroups) == 0 {
 		return true
 	}
@@ -31,12 +31,12 @@ func isInLdapGroups(user string, ldapGroups []string, conn *ldap.Conn) bool {
 
 	searchRequest := ldap.NewSearchRequest("ou=groups,o=bath.ac.uk", ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 0, 0, false, fmt.Sprintf("(&(objectClass=groupOfNames)(member=uid=%s,ou=people,o=bath.ac.uk))", user), []string{"cn"}, nil)
 
-	sr, err := conn.Search(searchRequest)
+	sr, err := (*conn).Search(searchRequest)
 	if err != nil {
 		if err.(*ldap.Error).ResultCode == ldap.ErrorNetwork {
 			slog.Debug("LDAP connection lost, reconnecting...")
 			var err error
-			conn, err = ldap.DialURL(os.Getenv("LDAP_URL"))
+			*conn, err = ldap.DialURL(os.Getenv("LDAP_URL"))
 			if err != nil {
 				slog.Debug("Failed to reconnect to LDAP server:", slog.String("error", err.Error()))
 				return false
@@ -178,7 +178,7 @@ func main() {
 				}
 
 				if len(ldapUrl) > 0 {
-					if !isInLdapGroups(user, ldapGroups, conn) {
+					if !isInLdapGroups(user, ldapGroups, &conn) {
 						slog.Debug("User not in LDAP groups:", slog.String("user", user))
 						// could overload ldap if a valid token cannot be refreshed
 						http.SetCookie(w, &http.Cookie{
@@ -260,7 +260,7 @@ func main() {
 			}
 
 			if len(ldapUrl) > 0 {
-				if !isInLdapGroups(serviceResponse.User, ldapGroups, conn) {
+				if !isInLdapGroups(serviceResponse.User, ldapGroups, &conn) {
 					slog.Debug("User not in LDAP groups:", slog.String("user", serviceResponse.User))
 					http.Error(w, "access denied (ldap)", http.StatusForbidden)
 					return
