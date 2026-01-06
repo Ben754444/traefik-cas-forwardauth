@@ -153,6 +153,7 @@ func main() {
 				http.SetCookie(w, &http.Cookie{
 					Name:   "session_id",
 					MaxAge: -1,
+					Path:   "/",
 				})
 				http.Redirect(w, r, casUrl.String()+"/login?service="+url.QueryEscape(newUrl.String()), http.StatusFound)
 				return
@@ -172,6 +173,7 @@ func main() {
 						Name:   "session_id",
 						Value:  "",
 						MaxAge: -1,
+						Path:   "/",
 					})
 					http.Error(w, "access denied", http.StatusForbidden)
 					return
@@ -185,6 +187,7 @@ func main() {
 							Name:   "session_id",
 							Value:  "",
 							MaxAge: -1,
+							Path:   "/",
 						})
 						http.Error(w, "access denied (ldap)", http.StatusForbidden)
 						return
@@ -195,6 +198,7 @@ func main() {
 					Name:   "session_id",
 					Value:  genToken(user, newUrl.Host, hmacSecret),
 					MaxAge: 6 * 60 * 60,
+					Path: "/",
 				})
 
 				http.Redirect(w, r, newUrl.String(), http.StatusFound)
@@ -271,6 +275,7 @@ func main() {
 				Name:   "session_id",
 				Value:  genToken(serviceResponse.User, newUrl.Host, hmacSecret),
 				MaxAge: 6 * 60 * 60,
+				Path:   "/",
 			})
 
 			// remove ticket query
