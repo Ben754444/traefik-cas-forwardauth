@@ -204,8 +204,8 @@ func main() {
 				http.Redirect(w, r, newUrl.String(), http.StatusFound)
 			}
 
-			w.WriteHeader(http.StatusOK)
 			w.Header().Set("X-User", user)
+			w.WriteHeader(http.StatusOK)
 			return
 
 		}
