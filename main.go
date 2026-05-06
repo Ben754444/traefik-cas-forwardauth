@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/go-ldap/ldap/v3"
 	"github.com/golang-jwt/jwt/v5"
+	"go.opentelemetry.io/contrib/bridges/otelslog"
 	"golang.org/x/net/html/charset"
 )
 
@@ -36,12 +38,15 @@ func sendErrorPage(w http.ResponseWriter, policy string, user string, fallback s
 	http.Error(w, fallback, http.StatusForbidden)
 }
 
+var logger = otelslog.NewLogger("cas")
+
 func isInLdapGroups(user string, ldapGroups []string, conn **ldap.Conn) bool {
 	if len(ldapGroups) == 0 {
 		return true
 	}
 
 	slog.Debug("Checking LDAP groups for user:", slog.String("user", user), slog.String("groups", strings.Join(ldapGroups, ", ")))
+	logger.Debug("Checking LDAP groups for user", slog.String("user", user), slog.String("groups", strings.Join(ldapGroups, ", ")))
 
 	searchRequest := ldap.NewSearchRequest("ou=groups,o=bath.ac.uk", ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 0, 0, false, fmt.Sprintf("(&(objectClass=groupOfNames)(member=uid=%s,ou=people,o=bath.ac.uk))", user), []string{"cn"}, nil)
 
@@ -49,15 +54,18 @@ func isInLdapGroups(user string, ldapGroups []string, conn **ldap.Conn) bool {
 	if err != nil {
 		if err.(*ldap.Error).ResultCode == ldap.ErrorNetwork {
 			slog.Debug("LDAP connection lost, reconnecting...")
+			logger.Debug("LDAP connection lost, reconnecting...")
 			var err error
 			*conn, err = ldap.DialURL(os.Getenv("LDAP_URL"))
 			if err != nil {
 				slog.Debug("Failed to reconnect to LDAP server:", slog.String("error", err.Error()))
+				logger.Debug("Failed to reconnect to LDAP server", slog.String("error", err.Error()))
 				return false
 			}
 			return isInLdapGroups(user, ldapGroups, conn)
 		}
 		slog.Debug("LDAP search error:", slog.String("error", err.Error()))
+		logger.Debug("LDAP search error", slog.String("error", err.Error()))
 		return false
 
 	}
@@ -100,9 +108,21 @@ func genToken(user string, host string, hmacSecret []byte) string {
 }
 
 func main() {
+	ctx := context.Background()
+
+	shutdown, err := InitLoggerProvider(ctx, "cas")
+	if err != nil {
+		panic(err)
+	}
+	defer shutdown(ctx)
+
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})))
 
 	casUrl, err := url.ParseRequestURI(os.Getenv("CAS_URL"))
+	if err != nil {
+		fmt.Printf("invalid CAS_URL: %s\n", err)
+		return
+	}
 
 	hmacSecret := []byte(os.Getenv("JWT_SECRET"))
 
@@ -159,6 +179,7 @@ func main() {
 		// if authenticated
 		cookie, err := r.Cookie("session_id")
 		if err == nil {
+
 			token, _ := jwt.Parse(cookie.Value, func(token *jwt.Token) (any, error) {
 				return hmacSecret, nil
 			}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}))
@@ -183,6 +204,7 @@ func main() {
 			if remaining < 5*60*60 {
 				if !isWhitelisted(user, whitelistArr) {
 					slog.Debug("User not whitelisted:", slog.String("user", user))
+					logger.Info("Renew failed as user is not whitelisted", slog.String("user", user), slog.String("action", "RENEW_FAILED_NOT_WHITELISTED"), slog.String("source_ip", r.Header.Get("X-Forwarded-For")), slog.String("service", newUrl.String()))
 					http.SetCookie(w, &http.Cookie{
 						Name:   "session_id",
 						Value:  "",
@@ -196,6 +218,7 @@ func main() {
 				if len(ldapUrl) > 0 {
 					if !isInLdapGroups(user, ldapGroups, &conn) {
 						slog.Debug("User not in LDAP groups:", slog.String("user", user))
+						logger.Info("Renew failed as user is not in LDAP group", slog.String("user", user), slog.String("action", "RENEW_FAILED_NO_MEMBERSHIP"), slog.String("source_ip", r.Header.Get("X-Forwarded-For")), slog.String("service", newUrl.String()), slog.String("groups", strings.Join(ldapGroups, ", ")))
 						// could overload ldap if a valid token cannot be refreshed
 						http.SetCookie(w, &http.Cookie{
 							Name:   "session_id",
@@ -246,6 +269,7 @@ func main() {
 					errStr = fmt.Sprintf("status=%d", serviceValidation.StatusCode)
 				}
 				slog.Debug("Failed to validate CAS ticket:", slog.String("error", errStr))
+				logger.Warn("Failed to validate CAS ticket", slog.String("action", "CAS_TICKET_VALIDATION_ERROR"), slog.String("source_ip", r.Header.Get("X-Forwarded-For")), slog.String("service", newUrl.String()))
 				http.Error(w, "CAS communication error. is it down?", http.StatusInternalServerError)
 				return
 			}
@@ -255,6 +279,7 @@ func main() {
 			body, err := io.ReadAll(serviceValidation.Body)
 			if err != nil {
 				slog.Debug("Failed to read CAS response:", slog.String("error", err.Error()))
+				logger.Error("Failed to read CAS response", slog.String("action", "CAS_RESPONSE_ERROR"), slog.String("source_ip", r.Header.Get("X-Forwarded-For")), slog.String("service", newUrl.String()))
 				http.Error(w, "CAS communication error. is it down?", http.StatusInternalServerError)
 				return
 			}
@@ -265,12 +290,14 @@ func main() {
 			decoder.CharsetReader = charset.NewReaderLabel
 			if err := decoder.Decode(&serviceResponse); err != nil {
 				slog.Debug("Failed to parse CAS response:", slog.String("error", err.Error()))
+				logger.Error("Failed to parse CAS response", slog.String("action", "CAS_RESPONSE_PARSE_ERROR"), slog.String("source_ip", r.Header.Get("X-Forwarded-For")), slog.String("service", newUrl.String()))
 				http.Error(w, "CAS communication error. is it down?", http.StatusInternalServerError)
 				return
 			}
 
 			if serviceResponse.User == "" {
 				slog.Debug("CAS authentication failed: no user in response")
+				logger.Error("No user in CAS response", slog.String("action", "CAS_NO_USER"), slog.String("source_ip", r.Header.Get("X-Forwarded-For")), slog.String("service", newUrl.String()))
 				slog.Debug("CAS response:", slog.String("response", string(body)))
 				http.Redirect(w, r, casUrl.String()+"/login?service="+url.QueryEscape(newUrl.String()), http.StatusFound)
 				return
@@ -278,6 +305,7 @@ func main() {
 
 			if !isWhitelisted(serviceResponse.User, whitelistArr) {
 				slog.Debug("User not whitelisted:", slog.String("user", serviceResponse.User))
+				logger.Debug("Issue failed as user is not whitelisted", slog.String("user", serviceResponse.User), slog.String("action", "ISSUE_FAILED_NOT_WHITELISTED"), slog.String("source_ip", r.Header.Get("X-Forwarded-For")), slog.String("service", newUrl.String()))
 				sendErrorPage(w, "ldap_uid", serviceResponse.User, "access denied")
 				return
 			}
@@ -285,6 +313,7 @@ func main() {
 			if len(ldapUrl) > 0 {
 				if !isInLdapGroups(serviceResponse.User, ldapGroups, &conn) {
 					slog.Debug("User not in LDAP groups:", slog.String("user", serviceResponse.User))
+					logger.Debug("Issue failed as user is not in LDAP group", slog.String("user", serviceResponse.User), slog.String("action", "ISSUE_FAILED_NO_MEMBERSHIP"), slog.String("source_ip", r.Header.Get("X-Forwarded-For")), slog.String("service", newUrl.String()), slog.String("groups", strings.Join(ldapGroups, ", ")))
 					sendErrorPage(w, "ldap_group", serviceResponse.User, "access denied (ldap)")
 					return
 				}
@@ -301,6 +330,7 @@ func main() {
 			http.Redirect(w, r, newUrl.String(), http.StatusFound)
 			return
 		}
+		logger.Debug("Redirecting "+r.Header.Get("X-Forwarded-For")+" to login for "+newUrl.String(), slog.String("service", newUrl.String()), slog.String("source_ip", r.Header.Get("X-Forwarded-For")), slog.String("action", "CAS_REDIRECT"))
 		http.Redirect(w, r, casUrl.String()+"/login?service="+url.QueryEscape(newUrl.String()), http.StatusFound)
 
 	})
