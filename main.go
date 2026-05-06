@@ -237,6 +237,7 @@ func main() {
 					MaxAge: 6 * 60 * 60,
 					Path:   "/",
 				})
+				logger.Info("User session was extended", slog.String("user", user), slog.String("action", "SESSION_EXTENDED"), slog.String("source_ip", r.Header.Get("X-Forwarded-For")), slog.String("service", newUrl.String()))
 
 				http.Redirect(w, r, newUrl.String(), http.StatusFound)
 			}
@@ -325,6 +326,7 @@ func main() {
 				MaxAge: 6 * 60 * 60,
 				Path:   "/",
 			})
+			logger.Info("User logged in to service", slog.String("user", serviceResponse.User), slog.String("action", "LOGIN"), slog.String("source_ip", r.Header.Get("X-Forwarded-For")), slog.String("service", newUrl.String()))
 
 			// remove ticket query
 			http.Redirect(w, r, newUrl.String(), http.StatusFound)
