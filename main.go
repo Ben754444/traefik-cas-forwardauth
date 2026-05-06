@@ -306,7 +306,7 @@ func main() {
 
 			if !isWhitelisted(serviceResponse.User, whitelistArr) {
 				slog.Debug("User not whitelisted:", slog.String("user", serviceResponse.User))
-				logger.Debug("Issue failed as user is not whitelisted", slog.String("user", serviceResponse.User), slog.String("action", "ISSUE_FAILED_NOT_WHITELISTED"), slog.String("source_ip", r.Header.Get("X-Forwarded-For")), slog.String("service", newUrl.String()))
+				logger.Info("Issue failed as user is not whitelisted", slog.String("user", serviceResponse.User), slog.String("action", "ISSUE_FAILED_NOT_WHITELISTED"), slog.String("source_ip", r.Header.Get("X-Forwarded-For")), slog.String("service", newUrl.String()))
 				sendErrorPage(w, "ldap_uid", serviceResponse.User, "access denied")
 				return
 			}
@@ -314,7 +314,7 @@ func main() {
 			if len(ldapUrl) > 0 {
 				if !isInLdapGroups(serviceResponse.User, ldapGroups, &conn) {
 					slog.Debug("User not in LDAP groups:", slog.String("user", serviceResponse.User))
-					logger.Debug("Issue failed as user is not in LDAP group", slog.String("user", serviceResponse.User), slog.String("action", "ISSUE_FAILED_NO_MEMBERSHIP"), slog.String("source_ip", r.Header.Get("X-Forwarded-For")), slog.String("service", newUrl.String()), slog.String("groups", strings.Join(ldapGroups, ", ")))
+					logger.Info("Issue failed as user is not in LDAP group", slog.String("user", serviceResponse.User), slog.String("action", "ISSUE_FAILED_NO_MEMBERSHIP"), slog.String("source_ip", r.Header.Get("X-Forwarded-For")), slog.String("service", newUrl.String()), slog.String("groups", strings.Join(ldapGroups, ", ")))
 					sendErrorPage(w, "ldap_group", serviceResponse.User, "access denied (ldap)")
 					return
 				}
