@@ -22,9 +22,6 @@ func InitLoggerProvider(ctx context.Context, serviceName string) (func(context.C
 		return nil, fmt.Errorf("OTEL_EXPORTER_OTLP_ENDPOINT not set")
 	}
 	path := os.Getenv("OTEL_EXPORTER_OTLP_PATH")
-	if path != "" {
-		endpoint += path
-	}
 
 	// Create OTLP log exporter
 	exporter, err := otlploghttp.New(ctx,
