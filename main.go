@@ -22,6 +22,20 @@ type ServiceResponse struct {
 	User string `xml:"authenticationSuccess>user"`
 }
 
+var errorPageHTML string
+
+func sendErrorPage(w http.ResponseWriter, policy string, user string, fallback string) {
+	if errorPageHTML != "" {
+		content := strings.ReplaceAll(errorPageHTML, "POLICY_REPLACE", policy)
+		content = strings.ReplaceAll(errorPageHTML, "USER_REPLACE", user)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(content))
+		return
+	}
+	http.Error(w, fallback, http.StatusForbidden)
+}
+
 func isInLdapGroups(user string, ldapGroups []string, conn **ldap.Conn) bool {
 	if len(ldapGroups) == 0 {
 		return true
@@ -89,18 +103,18 @@ func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})))
 
 	casUrl, err := url.ParseRequestURI(os.Getenv("CAS_URL"))
-	if err != nil {
-		println("Invalid CAS_URL:", err.Error())
-		return
-	}
 
 	hmacSecret := []byte(os.Getenv("JWT_SECRET"))
-	if len(hmacSecret) == 0 {
-		println("JWT_SECRET is not set")
-		return
-	}
 
 	ldapUrl := os.Getenv("LDAP_URL")
+
+	if ep := os.Getenv("ERROR_PAGE"); ep != "" {
+		if b, err := os.ReadFile(ep); err != nil {
+			slog.Debug("Failed to read ERROR_PAGE:", slog.String("error", err.Error()))
+		} else {
+			errorPageHTML = string(b)
+		}
+	}
 
 	var conn *ldap.Conn
 	if len(ldapUrl) > 0 {
@@ -175,7 +189,7 @@ func main() {
 						MaxAge: -1,
 						Path:   "/",
 					})
-					http.Error(w, "access denied", http.StatusForbidden)
+					sendErrorPage(w, "ldap_uid", user, "access denied")
 					return
 				}
 
@@ -189,7 +203,7 @@ func main() {
 							MaxAge: -1,
 							Path:   "/",
 						})
-						http.Error(w, "access denied (ldap)", http.StatusForbidden)
+						sendErrorPage(w, "ldap_group", user, "access denied (ldap)")
 						return
 					}
 				}
@@ -198,7 +212,7 @@ func main() {
 					Name:   "session_id",
 					Value:  genToken(user, newUrl.Host, hmacSecret),
 					MaxAge: 6 * 60 * 60,
-					Path: "/",
+					Path:   "/",
 				})
 
 				http.Redirect(w, r, newUrl.String(), http.StatusFound)
@@ -225,8 +239,14 @@ func main() {
 			}
 			serviceValidation, err := http.Get(casUrl.String() + "/serviceValidate?service=" + url.QueryEscape(newUrl.String()) + "&ticket=" + ticket)
 			if err != nil || serviceValidation.StatusCode != http.StatusOK {
-				slog.Debug("Failed to validate CAS ticket:", slog.String("error", err.Error()))
-				http.Error(w, "CAS communication error", http.StatusInternalServerError)
+				errStr := ""
+				if err != nil {
+					errStr = err.Error()
+				} else {
+					errStr = fmt.Sprintf("status=%d", serviceValidation.StatusCode)
+				}
+				slog.Debug("Failed to validate CAS ticket:", slog.String("error", errStr))
+				http.Error(w, "CAS communication error. is it down?", http.StatusInternalServerError)
 				return
 			}
 
@@ -235,7 +255,7 @@ func main() {
 			body, err := io.ReadAll(serviceValidation.Body)
 			if err != nil {
 				slog.Debug("Failed to read CAS response:", slog.String("error", err.Error()))
-				http.Error(w, "CAS communication error", http.StatusInternalServerError)
+				http.Error(w, "CAS communication error. is it down?", http.StatusInternalServerError)
 				return
 			}
 
@@ -245,28 +265,27 @@ func main() {
 			decoder.CharsetReader = charset.NewReaderLabel
 			if err := decoder.Decode(&serviceResponse); err != nil {
 				slog.Debug("Failed to parse CAS response:", slog.String("error", err.Error()))
-				http.Error(w, "CAS communication error", http.StatusInternalServerError)
+				http.Error(w, "CAS communication error. is it down?", http.StatusInternalServerError)
 				return
 			}
 
 			if serviceResponse.User == "" {
 				slog.Debug("CAS authentication failed: no user in response")
 				slog.Debug("CAS response:", slog.String("response", string(body)))
-				//http.Error(w, "CAS authentication failed", http.StatusUnauthorized)
 				http.Redirect(w, r, casUrl.String()+"/login?service="+url.QueryEscape(newUrl.String()), http.StatusFound)
 				return
 			}
 
 			if !isWhitelisted(serviceResponse.User, whitelistArr) {
 				slog.Debug("User not whitelisted:", slog.String("user", serviceResponse.User))
-				http.Error(w, "access denied", http.StatusForbidden)
+				sendErrorPage(w, "ldap_uid", serviceResponse.User, "access denied")
 				return
 			}
 
 			if len(ldapUrl) > 0 {
 				if !isInLdapGroups(serviceResponse.User, ldapGroups, &conn) {
 					slog.Debug("User not in LDAP groups:", slog.String("user", serviceResponse.User))
-					http.Error(w, "access denied (ldap)", http.StatusForbidden)
+					sendErrorPage(w, "ldap_group", serviceResponse.User, "access denied (ldap)")
 					return
 				}
 			}
@@ -285,8 +304,6 @@ func main() {
 		http.Redirect(w, r, casUrl.String()+"/login?service="+url.QueryEscape(newUrl.String()), http.StatusFound)
 
 	})
-
-	println("CAS URL:", casUrl.String())
 
 	println("Starting proxy server on port", port)
 	err = http.ListenAndServe(":"+port, nil)
