@@ -23,9 +23,7 @@ func InitLoggerProvider(ctx context.Context, serviceName string) (func(context.C
 	}
 
 	// Create OTLP log exporter
-	exporter, err := otlploghttp.New(ctx,
-		otlploghttp.WithEndpoint(endpoint),
-	)
+	exporter, err := otlploghttp.New(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create OTLP log exporter: %w", err)
 	}
