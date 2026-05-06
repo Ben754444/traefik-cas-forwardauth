@@ -27,7 +27,7 @@ var errorPageHTML string
 func sendErrorPage(w http.ResponseWriter, policy string, user string, fallback string) {
 	if errorPageHTML != "" {
 		content := strings.ReplaceAll(errorPageHTML, "POLICY_REPLACE", policy)
-		content = strings.ReplaceAll(errorPageHTML, "USER_REPLACE", user)
+		content = strings.ReplaceAll(content, "USER_REPLACE", user)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusForbidden)
 		_, _ = w.Write([]byte(content))
